@@ -24,6 +24,22 @@ Four tools available: `restart_container`, `clean_disk_space`,
 counts and the last 20 analyses and remediations.
 
 ## Architecture
+Prometheus + node-exporter + cAdvisor
+↓
+Agent 1 (monitor) — every 5 min
+└── Queries Prometheus + Proxmox API
+└── Sends snapshot to Claude
+└── Classifies: INFO / WARNING / CRITICAL
+└── Writes to analysis_history.db
+└── Posts Slack alert on WARNING/CRITICAL
+↓
+Agent 2 (remediation) — triggered by monitor
+└── Claude tool-use: restart_container, clean_disk_space,
+scale_resources, send_alert
+└── DRY_RUN=true by default
+└── Writes to remediation_history.db
+↓
+Dashboard (Flask :8888) — read-only, 24h history
 
 
 ## Quick Start
@@ -84,4 +100,24 @@ All configuration via `.env` (copy from `.env.example`):
 | `PROXMOX_HOST` | Proxmox API host | optional |
 
 ## Project Structure
+testlab-ai-agents/
+├── agent1-monitor/
+│ ├── monitor_agent.py
+│ ├── Dockerfile
+│ └── requirements.txt
+├── agent2-remediation/
+│ ├── remediation_agent.py
+│ ├── Dockerfile
+│ └── requirements.txt
+├── dashboard/
+│ ├── app.py
+│ └── Dockerfile
+├── config/prometheus.yml
+├── docker-compose.yml
+├── deploy.sh
+├── refresh-status.sh
+├── .env.example
+├── OPERATIONS.md
+├── EXAMPLES.md
+└── CHECKLIST.md
 
