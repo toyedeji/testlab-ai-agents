@@ -1,0 +1,146 @@
+version: '3.8'
+
+services:
+  # Agent 1: Monitoring Agent
+  monitor-agent:
+    build:
+      context: ./agent1-monitor
+      dockerfile: Dockerfile
+    container_name: testlab-monitor-agent
+    restart: unless-stopped
+    environment:
+      # Required
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - PROMETHEUS_URL=${PROMETHEUS_URL:-http://prometheus:9090}
+      
+      # Optional
+      - WEBHOOK_URL=${WEBHOOK_URL}
+      - MONITOR_INTERVAL=${MONITOR_INTERVAL:-300}
+      - DB_PATH=/data/analysis_history.db
+      
+      # Proxmox (optional)
+      - PROXMOX_URL=${PROXMOX_URL}
+      - PROXMOX_TOKEN_ID=${PROXMOX_TOKEN_ID}
+      - PROXMOX_TOKEN_SECRET=${PROXMOX_TOKEN_SECRET}
+      
+    volumes:
+      - ./data/monitor:/data
+      - ./data/shared:/shared
+    networks:
+      - monitoring
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import os; exit(0 if os.path.exists('/data/analysis_history.db') else 1)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
+  # Agent 2: Remediation Agent
+  remediation-agent:
+    build:
+      context: ./agent2-remediation
+      dockerfile: Dockerfile
+    container_name: testlab-remediation-agent
+    restart: unless-stopped
+    environment:
+      # Required
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      
+      # Configuration
+      - WEBHOOK_URL=${WEBHOOK_URL}
+      - DB_PATH=/data/remediation_history.db
+      - DRY_RUN=${DRY_RUN:-true}
+      - APPROVED_ACTIONS=${APPROVED_ACTIONS:-send_alert}
+      
+    volumes:
+      - ./data/remediation:/data
+      - ./data/shared:/shared
+      - /var/run/docker.sock:/var/run/docker.sock:ro  # For Docker operations (read-only)
+    networks:
+      - monitoring
+    profiles:
+      - remediation  # Only start if explicitly enabled
+
+  # Prometheus (if not already running)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - monitoring
+    profiles:
+      - full-stack  # Only deploy if you don't have Prometheus already
+
+  # Node Exporter (if not already running)
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter
+    restart: unless-stopped
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    ports:
+      - "9100:9100"
+    networks:
+      - monitoring
+    profiles:
+      - full-stack
+
+  # cAdvisor for container metrics (if not already running)
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: cadvisor
+    restart: unless-stopped
+    privileged: true
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    ports:
+      - "8080:8080"
+    networks:
+      - monitoring
+    profiles:
+      - full-stack
+
+  # Web Dashboard for viewing agent reports
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: testlab-ai-dashboard
+    restart: unless-stopped
+    ports:
+      - "8888:8080"
+    volumes:
+      - ./data/monitor:/data/monitor:ro
+      - ./data/remediation:/data/remediation:ro
+    networks:
+      - monitoring
+    profiles:
+      - dashboard
+
+networks:
+  monitoring:
+    name: testlab-monitoring
+    driver: bridge
+
+volumes:
+  prometheus-data:
+    name: testlab-prometheus-data
